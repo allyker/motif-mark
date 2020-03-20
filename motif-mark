@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+#plot specified motifs on a visual of a gene and its exons
+
+import math
+import cairo
+import argparse
+import re
+
+#set up argparse for genefile, motif file, and color scheme
+parser = argparse.ArgumentParser()
+parser.add_argument("-g", "--genefile", type=str,required=True, help='FASTA file with genes, exons in uppercase')
+parser.add_argument("-m", "--motiffile", type=str,required=True, help='file with motifs, 7 motifs MAX')
+parser.add_argument('-color',"--colorscheme",required=True, choices=['Splat', 'BoTW', 'Colorblind'],help='pick a color scheme')
+args = parser.parse_args()
+
+#Make gene class
+class Gene:
+    def __init__(self, seq, header, motifs):
+        self.length=len(seq)
+        self.header=header
+        self.motif_list=motifs
+        self.motif_dict={}
+        self.exon_list=[]
+
+#Regex to find exons and store posistions in a list
+    def exonsearch(self, seq):
+        for y in re.finditer("[A-Z]+", seq):
+            self.exon_list.append([y.start(), y.end()])
+
+#Regex to find all occurances of each motifs
+#Put posistions into dict with motif # as key and posistions as values
+    def motifsearch(self, seq):
+        for m in self.motif_list:
+            for x in re.finditer(m.regtext, seq):
+                self.motif_dict.setdefault(m.color,[]).append([x.start(), x.end()])
+
+#Make motif class
+class Motif:
+    def __init__ (self, motif,n):
+        self.motif=motif
+        self.color=n
+#Convert motif to string for regex
+    def motifreg(self):
+        letters=list(self.motif)
+        reg=[]
+        reg.append("(?i)")
+        for letter in letters:
+            if letter == "T" or letter == "t" or letter == "U" or letter == "u":
+                reg.append("[TU]")
+            elif letter == "M" or letter == "m":
+                reg.append("[AC]")
+            elif letter == "R" or letter == "r":
+                reg.append("[AG]")
+            elif letter == "W" or letter == "w":
+                reg.append("[AT]")
+            elif letter == "S" or letter == "s":
+                reg.append("[CG]")
+            elif letter == "Y" or letter == "y":
+                reg.append("[CT]")
+            elif letter == "K" or letter == "k":
+                reg.append("[GT]")
+            elif letter == "V" or letter == "v":
+                reg.append("[ACG]")
+            elif letter == "H" or letter == "h":
+                reg.append("[ACT]")
+            elif letter == "D" or letter == "d":
+                reg.append("[AGT]")
+            elif letter == "B" or letter == "b":
+                reg.append("[CGT]")
+            elif letter == "N" or letter == "n":
+                reg.append("[AGCTUN]")
+            else:
+                reg.append(letter)
+        self.regtext=''.join(reg)
+
+#make list to store all motif objects
+motif_list=[]
+#start counter to number motifs
+n=0
+#read in motif file and make each line a motif object
+with open(args.motiffile) as f:
+    for line in f:
+        motif=line.strip()
+        m=Motif(motif, n)
+#Convert motif seq to regex string
+        m.motifreg()
+#Add motif object to list
+        motif_list.append(m)
+        n+=1
+
+#Make list to store gene objects
+gene_list=[]
+temp_seq=[]
+x=0
+maxlen=0
+#Open fasta file
+with open(args.genefile) as fh:
+    for line in fh:
+        line=line.strip()
+        if line.startswith(">"):
+            if x > 0:
+#Make gene object
+                g=Gene(seq, header, motif_list)
+#Find motifs and exons for each gene object
+                g.motifsearch(seq)
+                g.exonsearch(seq)
+                if g.length > maxlen:
+                    maxlen=g.length
+#Add to list of gene objects
+                gene_list.append(g)
+#Won't work the first time lol
+            else:
+                pass
+            temp_seq=[]
+#Set header line as header
+            header=line
+#Put sequence lines together and store as seq
+        else:
+            temp_seq.append(line)
+            seq=''.join(temp_seq)
+            x+=1
+#Same process for last record
+g=Gene(seq, header, motif_list)
+g.motifsearch(seq)
+g.exonsearch(seq)
+if g.length > maxlen:
+    maxlen=g.length
+gene_list.append(g)
+
+
+#color palettes:
+col_dict={
+"Line_col":[(0,0,0),(0,0,0),(.29,.31,.27)],
+"Exon_fill":[(.35,.38,.32), (0,0,.4),(.4,.43,.37)],
+"Colorblind":[[(0,0,0)],[(.35,.38,.32)],[(.9,.6,0), (.35,.7,.9), (0,.6,.5), (.95, .9,.25), (0,.45,.70), (.8,.4,0),(.8,.6,.7)]],
+"Splat":[[(0,0,0)],[(.35,.38,.32)],[(1,.27,.44),(1,.86,.05),(.36,.82,.36),(.04,.8,1),(.05,.06,.9),(.57,.03,.91),(1,.6,1)]],
+"BoTW":[[(.29,.31,.27)],[(.4,.43,.37)],[(0,.8,.04),(.32,.84,.87),(.91,.87,.20),(.94,.11,.15),(0,0,.6),(.8,.6,0),(.8,.90,.95)]]
+}
+#Set width and height
+WIDTH = 4.5
+HEIGHT = len(gene_list)+1
+PIXEL_SCALE=200
+
+#set up surface to draw on
+surface=cairo.SVGSurface(args.genefile+".svg", WIDTH*PIXEL_SCALE, HEIGHT*PIXEL_SCALE)
+context = cairo.Context(surface)
+context.scale(PIXEL_SCALE,PIXEL_SCALE)
+
+#color background
+context.rectangle(0,0,WIDTH, HEIGHT)
+context.set_source_rgb(1,1,1)
+context.fill()
+
+#draw lines and legend for each gene
+gcount=0
+for g in gene_list:
+#set gene line color, write gene label
+    context.set_source_rgb(col_dict[args.colorscheme][0][0][0],col_dict[args.colorscheme][0][0][1],col_dict[args.colorscheme][0][0][2])
+    context.set_font_size(0.1)
+    context.select_font_face("Arial",
+                         cairo.FONT_SLANT_NORMAL,
+                         cairo.FONT_WEIGHT_NORMAL)
+    context.move_to(0.25, gcount+.7)
+    context.show_text(g.header)
+#draw gene line
+    context.move_to(.25, gcount+1)
+    context.line_to(3.5*((g.length)/maxlen)+.25, gcount+1)
+    context.set_line_width(0.04)
+    context.stroke()
+#draw exon box in same line color, fill with lighter color
+    for x in g.exon_list:
+        context.rectangle(((x[0]/g.length)*((g.length)/maxlen))*3.5+.25, (gcount+.9), ((x[1]-x[0])/g.length)*(g.length/maxlen)*3.5, .2)
+        context.set_source_rgb(col_dict[args.colorscheme][1][0][0],col_dict[args.colorscheme][1][0][1],col_dict[args.colorscheme][1][0][2])
+        context.fill_preserve()
+        context.set_source_rgb(col_dict[args.colorscheme][0][0][0],col_dict[args.colorscheme][0][0][1],col_dict[args.colorscheme][0][0][2])
+        context.set_line_width(.02)
+        context.stroke()
+#draw all motifs in color specified by key, make
+    for m in g.motif_dict:
+        context.set_source_rgb(col_dict[args.colorscheme][2][m][0],col_dict[args.colorscheme][2][m][1],col_dict[args.colorscheme][2][m][2])
+        for v in g.motif_dict[m]:
+            context.rectangle(((v[0]/g.length)*(g.length/maxlen))*3.5+.25, (gcount+.9), ((v[1]-v[0])/g.length)*(g.length/maxlen)*3.5, .2)
+            context.fill()
+    gcount+=1
+mtcount=0
+#add legend in top right corner
+for ml in motif_list:
+        context.set_source_rgb(col_dict[args.colorscheme][0][0][0],col_dict[args.colorscheme][0][0][1],col_dict[args.colorscheme][0][0][2])
+        context.set_font_size(0.1)
+        context.select_font_face("Arial",
+                             cairo.FONT_SLANT_NORMAL,
+                             cairo.FONT_WEIGHT_NORMAL)
+        context.move_to(3.5, (mtcount*.1)+.15)
+        context.show_text(ml.motif)
+        context.rectangle(3.45, (mtcount*.1)+.1, .05, .05)
+        context.set_source_rgb(col_dict[args.colorscheme][2][ml.color][0],col_dict[args.colorscheme][2][ml.color][1],col_dict[args.colorscheme][2][ml.color][2])
+        context.fill()
+        mtcount+=1
+print("Image saved as:", args.genefile+".svg")
